@@ -6,7 +6,7 @@ use bevy::{
 
 use crate::{
     bake::{BAKE_KEY, BakeState},
-    material::{SdfSurfaceMaterial, TriplanarExtension, TriplanarSettings, build_material_layers},
+    material::{SdfSurfaceMaterial, TriplanarExtension},
     sdf::{SdfBuffers, SdfGrid, domain_aabb},
 };
 
@@ -49,22 +49,16 @@ struct HudText;
 fn spawn_scene(
     mut commands: Commands,
     mut materials: ResMut<Assets<SdfSurfaceMaterial>>,
-    mut images: ResMut<Assets<Image>>,
     grid: Res<SdfGrid>,
     buffers: Res<SdfBuffers>,
 ) {
-    let layers = build_material_layers(&mut images);
-
     let material = materials.add(ExtendedMaterial {
         base: StandardMaterial {
             perceptual_roughness: 0.65,
             metallic: 0.05,
             ..default()
         },
-        extension: TriplanarExtension {
-            settings: TriplanarSettings::default(),
-            layers: Some(layers),
-        },
+        extension: TriplanarExtension::default(),
     });
 
     commands.spawn((

@@ -4651,6 +4651,7 @@ name = "sdf_mesh"
 version = "0.1.0"
 dependencies = [
  "bevy",
+ "image",
 ]
 
 [[package]]
