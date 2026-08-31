@@ -1,4 +1,4 @@
-#import sdf_mesh::sdf_types::SdfParams
+#import sdf_mesh::sdf_types::{SdfParams, FieldSample}
 
 const TRI_TABLE_ROW: u32 = 16u;
 const MATERIAL_SLOTS: u32 = 4u;
@@ -10,7 +10,7 @@ struct Counters {
 }
 
 @group(0) @binding(0) var<uniform> params: SdfParams;
-@group(0) @binding(1) var<storage, read> field: array<vec2<f32>>;
+@group(0) @binding(1) var<storage, read> field: array<FieldSample>;
 @group(0) @binding(2) var<storage, read> tri_table: array<i32>;
 @group(0) @binding(3) var<storage, read_write> counters: Counters;
 @group(0) @binding(4) var<storage, read_write> vertices: array<f32>;
@@ -34,7 +34,7 @@ fn edge_corners(edge: u32) -> vec2<u32> {
     return vec2(edge - 8u, edge - 4u);
 }
 
-fn field_sample(cell: vec3<i32>) -> vec2<f32> {
+fn field_sample(cell: vec3<i32>) -> FieldSample {
     let limit = i32(params.grid_res) - 1;
     let clamped = clamp(cell, vec3(0), vec3(limit));
     let index = u32(clamped.x)
@@ -45,9 +45,9 @@ fn field_sample(cell: vec3<i32>) -> vec2<f32> {
 
 fn field_gradient(cell: vec3<i32>) -> vec3<f32> {
     return vec3(
-        field_sample(cell + vec3(1, 0, 0)).x - field_sample(cell - vec3(1, 0, 0)).x,
-        field_sample(cell + vec3(0, 1, 0)).x - field_sample(cell - vec3(0, 1, 0)).x,
-        field_sample(cell + vec3(0, 0, 1)).x - field_sample(cell - vec3(0, 0, 1)).x,
+        field_sample(cell + vec3(1, 0, 0)).dist - field_sample(cell - vec3(1, 0, 0)).dist,
+        field_sample(cell + vec3(0, 1, 0)).dist - field_sample(cell - vec3(0, 1, 0)).dist,
+        field_sample(cell + vec3(0, 0, 1)).dist - field_sample(cell - vec3(0, 0, 1)).dist,
     );
 }
 
@@ -57,16 +57,6 @@ fn safe_normalize(v: vec3<f32>) -> vec3<f32> {
         return vec3(0.0, 1.0, 0.0);
     }
     return v / len;
-}
-
-fn material_weights(material: f32) -> vec4<f32> {
-    let id = u32(round(max(material, 0.0)));
-    return vec4(
-        select(0.0, 1.0, id == 0u),
-        select(0.0, 1.0, id == 1u),
-        select(0.0, 1.0, id == 2u),
-        select(0.0, 1.0, id >= 3u),
-    );
 }
 
 fn grid_position(cell: vec3<i32>) -> vec3<f32> {
@@ -95,13 +85,13 @@ fn march(@builtin(global_invocation_id) gid: vec3<u32>) {
     let base_cell = vec3<i32>(gid);
 
     var distances: array<f32, 8>;
-    var materials: array<f32, 8>;
+    var weights: array<vec4<f32>, 8>;
     var mask = 0u;
     for (var corner = 0u; corner < 8u; corner = corner + 1u) {
         let sample = field_sample(base_cell + corner_offset(corner));
-        distances[corner] = sample.x;
-        materials[corner] = sample.y;
-        if sample.x < params.iso {
+        distances[corner] = sample.dist;
+        weights[corner] = sample.weights;
+        if sample.dist < params.iso {
             mask = mask | (1u << corner);
         }
     }
@@ -139,7 +129,7 @@ fn march(@builtin(global_invocation_id) gid: vec3<u32>) {
 
         let position = mix(grid_position(cell_a), grid_position(cell_b), t);
         let normal = safe_normalize(mix(field_gradient(cell_a), field_gradient(cell_b), t));
-        let weights = mix(material_weights(materials[a]), material_weights(materials[b]), t);
+        let blended = mix(weights[a], weights[b], t);
 
         let vertex = base + slot;
         let offset = params.vertex_base + vertex * params.vertex_stride;
@@ -150,10 +140,10 @@ fn march(@builtin(global_invocation_id) gid: vec3<u32>) {
         vertices[offset + 3u] = normal.x;
         vertices[offset + 4u] = normal.y;
         vertices[offset + 5u] = normal.z;
-        vertices[offset + 6u] = weights.x;
-        vertices[offset + 7u] = weights.y;
-        vertices[offset + 8u] = weights.z;
-        vertices[offset + 9u] = weights.w;
+        vertices[offset + 6u] = blended.x;
+        vertices[offset + 7u] = blended.y;
+        vertices[offset + 8u] = blended.z;
+        vertices[offset + 9u] = blended.w;
 
         indices[params.index_base + vertex] = vertex;
     }

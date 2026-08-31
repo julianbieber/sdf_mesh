@@ -1,5 +1,10 @@
 #define_import_path sdf_mesh::sdf_types
 
+struct FieldSample {
+    weights: vec4<f32>,
+    dist: f32,
+}
+
 struct SdfParams {
     origin: vec3<f32>,
     cell_size: f32,

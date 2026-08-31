@@ -18,6 +18,10 @@ run-release:
 run-ship:
     cargo run --release --no-default-features
 
+# Write the starter material source PNGs the bake pipeline reads
+gen-textures:
+    cargo run --bin gen_material_textures
+
 build:
     cargo build
 

@@ -2,14 +2,23 @@
 
 struct Surface {
     dist: f32,
-    material: u32,
+    weights: vec4<f32>,
+}
+
+fn surface_blend(dist: f32, weights: vec4<f32>) -> Surface {
+    var s: Surface;
+    s.dist = dist;
+    s.weights = weights;
+    return s;
 }
 
 fn surface(dist: f32, material: u32) -> Surface {
-    var s: Surface;
-    s.dist = dist;
-    s.material = material;
-    return s;
+    return surface_blend(dist, vec4(
+        select(0.0, 1.0, material == 0u),
+        select(0.0, 1.0, material == 1u),
+        select(0.0, 1.0, material == 2u),
+        select(0.0, 1.0, material >= 3u),
+    ));
 }
 
 fn sd_sphere(p: vec3<f32>, radius: f32) -> f32 {
@@ -64,33 +73,25 @@ fn op_subtract(a: Surface, b: Surface) -> Surface {
     if a.dist >= -b.dist {
         return a;
     }
-    return surface(-b.dist, a.material);
+    return surface_blend(-b.dist, a.weights);
 }
 
 fn op_smooth_union(a: Surface, b: Surface, k: f32) -> Surface {
     let h = clamp(0.5 + 0.5 * (b.dist - a.dist) / k, 0.0, 1.0);
     let dist = mix(b.dist, a.dist, h) - k * h * (1.0 - h);
-    var material = b.material;
-    if h > 0.5 {
-        material = a.material;
-    }
-    return surface(dist, material);
+    return surface_blend(dist, mix(b.weights, a.weights, h));
 }
 
 fn op_smooth_intersect(a: Surface, b: Surface, k: f32) -> Surface {
     let h = clamp(0.5 - 0.5 * (b.dist - a.dist) / k, 0.0, 1.0);
     let dist = mix(b.dist, a.dist, h) + k * h * (1.0 - h);
-    var material = b.material;
-    if h > 0.5 {
-        material = a.material;
-    }
-    return surface(dist, material);
+    return surface_blend(dist, mix(b.weights, a.weights, h));
 }
 
 fn op_smooth_subtract(a: Surface, b: Surface, k: f32) -> Surface {
     let h = clamp(0.5 - 0.5 * (a.dist + b.dist) / k, 0.0, 1.0);
     let dist = mix(a.dist, -b.dist, h) + k * h * (1.0 - h);
-    return surface(dist, a.material);
+    return surface_blend(dist, a.weights);
 }
 
 fn op_translate(p: vec3<f32>, offset: vec3<f32>) -> vec3<f32> {
