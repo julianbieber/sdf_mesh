@@ -1,8 +1,8 @@
-#import sdf_mesh::sdf_types::SdfParams
+#import sdf_mesh::sdf_types::{SdfParams, FieldSample}
 #import sdf_mesh::sdf::sdf_scene
 
 @group(0) @binding(0) var<uniform> params: SdfParams;
-@group(0) @binding(1) var<storage, read_write> field: array<vec2<f32>>;
+@group(0) @binding(1) var<storage, read_write> field: array<FieldSample>;
 
 @compute @workgroup_size(4, 4, 4)
 fn evaluate(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -15,5 +15,5 @@ fn evaluate(@builtin(global_invocation_id) gid: vec3<u32>) {
     let sample = sdf_scene(position, params.time);
 
     let index = gid.x + gid.y * res + gid.z * res * res;
-    field[index] = vec2<f32>(sample.dist, f32(sample.material));
+    field[index] = FieldSample(sample.weights, sample.dist);
 }

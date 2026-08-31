@@ -16,7 +16,9 @@ use bevy::{
     shader::Shader,
 };
 
-use super::{SdfBuffers, SdfClock, SdfCounters, SdfGrid, SdfParams, VERTEX_STRIDE_F32};
+use super::{
+    FieldSample, SdfBuffers, SdfClock, SdfCounters, SdfGrid, SdfParams, VERTEX_STRIDE_F32,
+};
 
 const SHADER_LIBRARIES: [&str; 3] = [
     "shaders/sdf_types.wgsl",
@@ -87,7 +89,7 @@ fn init_pipelines(
             ShaderStages::COMPUTE,
             (
                 uniform_buffer::<SdfParams>(false),
-                storage_buffer::<Vec<Vec2>>(false),
+                storage_buffer::<Vec<FieldSample>>(false),
             ),
         ),
     );
@@ -98,7 +100,7 @@ fn init_pipelines(
             ShaderStages::COMPUTE,
             (
                 uniform_buffer::<SdfParams>(false),
-                storage_buffer_read_only::<Vec<Vec2>>(false),
+                storage_buffer_read_only::<Vec<FieldSample>>(false),
                 storage_buffer_read_only::<Vec<i32>>(false),
                 storage_buffer::<SdfCounters>(false),
                 storage_buffer::<Vec<f32>>(false),

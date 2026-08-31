@@ -90,6 +90,12 @@ pub struct SdfParams {
 }
 
 #[derive(ShaderType, Clone, Copy, Default, Debug)]
+pub struct FieldSample {
+    pub weights: Vec4,
+    pub dist: f32,
+}
+
+#[derive(ShaderType, Clone, Copy, Default, Debug)]
 pub struct SdfCounters {
     pub vertex_count: u32,
     pub index_count: u32,
@@ -125,7 +131,7 @@ fn create_sdf_buffers(
 ) {
     let field = buffers.add(sized_buffer(
         "sdf_field",
-        grid.sample_count() * 8,
+        grid.sample_count() * FieldSample::min_size().get(),
         BufferUsages::STORAGE,
     ));
 
