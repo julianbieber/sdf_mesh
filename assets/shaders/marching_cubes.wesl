@@ -1,4 +1,4 @@
-#import sdf_mesh::sdf_types::{SdfParams, FieldSample}
+import super::sdf_types::{SdfParams, FieldSample};
 
 const TRI_TABLE_ROW: u32 = 16u;
 const MATERIAL_SLOTS: u32 = 4u;

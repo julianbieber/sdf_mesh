@@ -10,6 +10,7 @@ use bevy::{
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_resource::{BufferUsages, ShaderType},
         storage::ShaderBuffer,
+        RenderApp,
     },
 };
 
@@ -17,6 +18,7 @@ pub const VERTEX_STRIDE_F32: u32 = 10;
 pub const MATERIAL_SLOTS: usize = 4;
 
 #[derive(Resource, Clone, Copy, ExtractResource)]
+#[extract_app(RenderApp)]
 pub struct SdfGrid {
     pub resolution: u32,
     pub half_extent: f32,
@@ -63,6 +65,7 @@ impl SdfGrid {
 }
 
 #[derive(Resource, Clone, ExtractResource)]
+#[extract_app(RenderApp)]
 pub struct SdfBuffers {
     pub field: Handle<ShaderBuffer>,
     pub tri_table: Handle<ShaderBuffer>,
@@ -73,6 +76,7 @@ pub struct SdfBuffers {
 }
 
 #[derive(Resource, Clone, Copy, Default, ExtractResource)]
+#[extract_app(RenderApp)]
 pub struct SdfClock(pub f32);
 
 #[derive(ShaderType, Clone, Copy, Default)]
@@ -136,7 +140,7 @@ fn create_sdf_buffers(
     ));
 
     let mut tri_table = ShaderBuffer::from(tables::build_tri_table());
-    tri_table.buffer_description.label = Some("sdf_tri_table");
+    tri_table.label = "sdf_tri_table".into();
     tri_table.asset_usage = RenderAssetUsages::RENDER_WORLD;
     let tri_table = buffers.add(tri_table);
 
@@ -171,9 +175,9 @@ fn create_sdf_buffers(
 }
 
 fn sized_buffer(label: &'static str, size: u64, usage: BufferUsages) -> ShaderBuffer {
-    let mut buffer = ShaderBuffer::with_size(size as usize, RenderAssetUsages::RENDER_WORLD);
-    buffer.buffer_description.label = Some(label);
-    buffer.buffer_description.usage = usage;
+    let mut buffer = ShaderBuffer::with_size(size, RenderAssetUsages::RENDER_WORLD);
+    buffer.label = label.into();
+    buffer.buffer_usage = usage;
     buffer
 }
 

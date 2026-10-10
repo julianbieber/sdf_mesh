@@ -1,12 +1,12 @@
 set shell := ["bash", "-uc"]
 
 OBJ := "bake/sdf_surface.obj"
-SCENE := "assets/shaders/sdf.wgsl"
+SCENE := "assets/shaders/sdf.wesl"
 
 default:
     @just --list
 
-# Run the editor. Hot reload is on: edit assets/shaders/sdf.wgsl and save.
+# Run the editor. Hot reload is on: edit assets/shaders/sdf.wesl and save.
 run:
     cargo run
 
@@ -53,14 +53,12 @@ clean:
 check-placeholders:
     @rg -n 'TODO\(jb-(doc|comment)\):' src/ assets/ || echo "none outstanding"
 
-# Reset assets/shaders/sdf.wgsl to a single sphere
+# Reset assets/shaders/sdf.wesl to a single sphere
 scene-reset:
     #!/usr/bin/env bash
     set -euo pipefail
     cat > "{{ SCENE }}" <<'WGSL'
-    #define_import_path sdf_mesh::sdf
-
-    #import sdf_mesh::sdf_lib::{Surface, surface, sd_sphere}
+    import super::sdf_lib::{Surface, surface, sd_sphere};
 
     fn sdf_scene(p: vec3<f32>, time: f32) -> Surface {
         return surface(sd_sphere(p, 1.0), 0u);
