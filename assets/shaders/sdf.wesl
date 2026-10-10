@@ -1,6 +1,4 @@
-#define_import_path sdf_mesh::sdf
-
-#import sdf_mesh::sdf_lib::{
+import super::sdf_lib::{
     Surface,
     surface,
     sd_sphere,
@@ -23,7 +21,7 @@
     op_rotate_z,
     op_mirror_x,
     op_twist_y,
-}
+};
 
 // TODO(jb-comment): explain that this function is the whole editable surface of the tool,
 // that material ids 0-3 select triplanar texture layers, and that saving re-dispatches both

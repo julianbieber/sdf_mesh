@@ -159,7 +159,7 @@ fn update_hud(
     let bake_line = bake.status.as_deref().unwrap_or("idle");
 
     hud.0 = format!(
-        "assets/shaders/sdf.wgsl  -  edit and save to remesh\n\
+        "assets/shaders/sdf.wesl  -  edit and save to remesh\n\
          grid {res}^3   budget {budget} verts   iso {iso}\n\
          drag: orbit    wheel: zoom    {key:?}: bake obj\n\
          bake: {bake_line}\n\

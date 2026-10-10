@@ -27,6 +27,7 @@ pub const BAKE_KEY: KeyCode = KeyCode::KeyB;
 const OUTPUT_PATH: &str = "bake/sdf_surface.obj";
 
 #[derive(Resource, Clone, Copy, Default, ExtractResource)]
+#[extract_app(RenderApp)]
 pub struct BakeRequest(pub bool);
 
 #[derive(Resource, Default)]
@@ -256,11 +257,11 @@ fn copy_bake_buffers(
     let vertex_offset = vertex_slice.range.start as u64 * vertex_element;
     let vertex_bytes = ((vertex_slice.range.end - vertex_slice.range.start) as u64
         * vertex_element)
-        .min(bake_vertices.buffer_descriptor.size);
+        .min(bake_vertices.buffer.size());
 
     let index_offset = index_slice.range.start as u64 * 4;
     let index_bytes = ((index_slice.range.end - index_slice.range.start) as u64 * 4)
-        .min(bake_indices.buffer_descriptor.size);
+        .min(bake_indices.buffer.size());
 
     let encoder = render_context.command_encoder();
     encoder.copy_buffer_to_buffer(

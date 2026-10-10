@@ -1,5 +1,5 @@
-#import sdf_mesh::sdf_types::{SdfParams, FieldSample}
-#import sdf_mesh::sdf::sdf_scene
+import super::sdf_types::{SdfParams, FieldSample};
+import super::sdf::sdf_scene;
 
 @group(0) @binding(0) var<uniform> params: SdfParams;
 @group(0) @binding(1) var<storage, read_write> field: array<FieldSample>;

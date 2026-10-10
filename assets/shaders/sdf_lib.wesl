@@ -1,5 +1,3 @@
-#define_import_path sdf_mesh::sdf_lib
-
 struct Surface {
     dist: f32,
     weights: vec4<f32>,

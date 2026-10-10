@@ -21,13 +21,13 @@ use super::{
 };
 
 const SHADER_LIBRARIES: [&str; 3] = [
-    "shaders/sdf_types.wgsl",
-    "shaders/sdf_lib.wgsl",
-    "shaders/sdf.wgsl",
+    "shaders/sdf_types.wesl",
+    "shaders/sdf_lib.wesl",
+    "shaders/sdf.wesl",
 ];
 
-const SDF_EVAL_SHADER: &str = "shaders/sdf_eval.wgsl";
-const MARCHING_CUBES_SHADER: &str = "shaders/marching_cubes.wgsl";
+const SDF_EVAL_SHADER: &str = "shaders/sdf_eval.wesl";
+const MARCHING_CUBES_SHADER: &str = "shaders/marching_cubes.wesl";
 
 const FIELD_WORKGROUP: u32 = 4;
 const CLEAR_WORKGROUP: u32 = 64;

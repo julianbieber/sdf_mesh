@@ -15,7 +15,7 @@ use bevy::{
 
 use crate::sdf::MATERIAL_SLOTS;
 
-const TRIPLANAR_SHADER: &str = "shaders/triplanar.wgsl";
+const TRIPLANAR_SHADER: &str = "shaders/triplanar.wesl";
 const LAYER_SIZE: u32 = 256;
 const MIP_LEVELS: u32 = 9;
 

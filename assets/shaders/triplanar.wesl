@@ -1,13 +1,18 @@
-#import bevy_pbr::pbr_fragment::pbr_input_from_standard_material
-#import bevy_pbr::pbr_functions::alpha_discard
+import bevy_pbr::render::{
+    pbr_fragment::pbr_input_from_standard_material,
+    pbr_functions::alpha_discard,
+};
 
-#ifdef PREPASS_PIPELINE
-#import bevy_pbr::prepass_io::{VertexOutput, FragmentOutput}
-#import bevy_pbr::pbr_deferred_functions::deferred_output
-#else
-#import bevy_pbr::forward_io::{VertexOutput, FragmentOutput}
-#import bevy_pbr::pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing}
-#endif
+@if(PREPASS_PIPELINE)
+import bevy_pbr::{
+    prepass::io::{VertexOutput, FragmentOutput},
+    deferred::functions::deferred_output,
+};
+@else
+import bevy_pbr::render::{
+    forward_io::{VertexOutput, FragmentOutput},
+    pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+};
 
 const MATERIAL_SLOTS: u32 = 4u;
 const BLEND_SLOTS: u32 = 2u;
@@ -29,13 +34,13 @@ struct MaterialParamsTable {
     entries: array<MaterialParams, MATERIAL_SLOTS>,
 }
 
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> triplanar: TriplanarSettings;
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var base_color_layers: texture_2d_array<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(102) var layer_sampler: sampler;
-@group(#{MATERIAL_BIND_GROUP}) @binding(103) var normal_layers: texture_2d_array<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(104) var orm_layers: texture_2d_array<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(105) var emissive_layers: texture_2d_array<f32>;
-@group(#{MATERIAL_BIND_GROUP}) @binding(106) var<uniform> material_params: MaterialParamsTable;
+@group(constants::MATERIAL_BIND_GROUP) @binding(100) var<uniform> triplanar: TriplanarSettings;
+@group(constants::MATERIAL_BIND_GROUP) @binding(101) var base_color_layers: texture_2d_array<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(102) var layer_sampler: sampler;
+@group(constants::MATERIAL_BIND_GROUP) @binding(103) var normal_layers: texture_2d_array<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(104) var orm_layers: texture_2d_array<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(105) var emissive_layers: texture_2d_array<f32>;
+@group(constants::MATERIAL_BIND_GROUP) @binding(106) var<uniform> material_params: MaterialParamsTable;
 
 struct PlaneGradients {
     zy_dx: vec2<f32>,
@@ -184,11 +189,10 @@ fn fragment(
     let world_normal = normalize(in.world_normal);
     let gradients = plane_gradients(world_position);
 
-#ifdef VERTEX_COLORS
+@if(VERTEX_COLORS)
     let weights = in.color;
-#else
+@if(!VERTEX_COLORS)
     let weights = vec4(1.0, 0.0, 0.0, 0.0);
-#endif
 
     let picked = pick_slots(weights);
 
@@ -219,20 +223,25 @@ fn fragment(
     }
 
     pbr_input.material.base_color = vec4(base_color, 1.0);
-    pbr_input.material.base_color = alpha_discard(pbr_input.material, pbr_input.material.base_color);
+    pbr_input.material.base_color = alpha_discard(
+        pbr_input.material.flags,
+        pbr_input.material.alpha_cutoff,
+        pbr_input.material.base_color,
+    );
     pbr_input.material.perceptual_roughness = clamp(roughness, 0.045, 1.0);
     pbr_input.material.metallic = clamp(metallic, 0.0, 1.0);
     pbr_input.material.emissive = vec4(emissive, 1.0);
     pbr_input.diffuse_occlusion = vec3(clamp(occlusion, 0.0, 1.0));
     pbr_input.N = normalize(normal);
 
-#ifdef PREPASS_PIPELINE
+@if(PREPASS_PIPELINE)
     let out = deferred_output(in, pbr_input);
-#else
+@if(!PREPASS_PIPELINE)
     var out: FragmentOutput;
+@if(!PREPASS_PIPELINE)
     out.color = apply_pbr_lighting(pbr_input);
+@if(!PREPASS_PIPELINE)
     out.color = main_pass_post_lighting_processing(pbr_input, out.color);
-#endif
 
     return out;
 }
