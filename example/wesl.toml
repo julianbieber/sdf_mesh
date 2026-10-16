@@ -1,0 +1,7 @@
+# A mesh project as any consumer of the editor would set one up.
+edition = "2026_pre"
+package-manager = "cargo"
+root = "shaders"
+
+[dependencies]
+sdf_mesh = { path = ".." }

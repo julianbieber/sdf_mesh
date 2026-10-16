@@ -1,0 +1,4 @@
+# The WESL package `sdf_mesh` that mesh projects depend on.
+edition = "2026_pre"
+package-manager = "cargo"
+root = "src/shaders"

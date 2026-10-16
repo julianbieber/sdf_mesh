@@ -1,4 +1,4 @@
-import super::sdf_lib::{
+import sdf_mesh::sdf_lib::{
     Surface,
     surface,
     sd_sphere,

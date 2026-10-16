@@ -7,10 +7,14 @@ default-run = "sdf_mesh"
 [dependencies]
 bevy = "0.20"
 image = { version = "0.25", default-features = false, features = ["png"] }
+wesl = "0.6"
+
+[dev-dependencies]
+naga = { version = "30", features = ["wgsl-in"] }
 
 [features]
 default = ["dev"]
-dev = ["bevy/file_watcher"]
+dev = ["bevy/file_watcher", "bevy/embedded_watcher"]
 
 [profile.dev]
 opt-level = 1

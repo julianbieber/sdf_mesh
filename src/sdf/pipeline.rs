@@ -1,3 +1,8 @@
+//! Compiles and dispatches the GPU passes that turn the opened scene into the
+//! displayed mesh, and reports whether the scene compiles.
+
+use std::sync::{Arc, Mutex};
+
 use bevy::{
     core_pipeline::schedule::camera_driver,
     ecs::schedule::IntoScheduleConfigs,
@@ -13,36 +18,111 @@ use bevy::{
         renderer::{RenderContext, RenderGraph, RenderGraphSystems, RenderQueue},
         storage::GpuShaderBuffer,
     },
-    shader::Shader,
+    shader::{Shader, ShaderCacheError},
 };
 
 use super::{
     FieldSample, SdfBuffers, SdfClock, SdfCounters, SdfGrid, SdfParams, VERTEX_STRIDE_F32,
 };
+use crate::{
+    project::MeshProject,
+    shaders::{ENTRY_ASSET, MARCHING_CUBES_SHADER, entry_module_source},
+};
 
-const SHADER_LIBRARIES: [&str; 3] = [
-    "shaders/sdf_types.wesl",
-    "shaders/sdf_lib.wesl",
-    "shaders/sdf.wesl",
-];
-
-const SDF_EVAL_SHADER: &str = "shaders/sdf_eval.wesl";
-const MARCHING_CUBES_SHADER: &str = "shaders/marching_cubes.wesl";
-
-const FIELD_WORKGROUP: u32 = 4;
+/// Edge length, in invocations, of the cubic workgroups the field and the cells
+/// are dispatched in.
+pub const FIELD_WORKGROUP: u32 = 4;
 const CLEAR_WORKGROUP: u32 = 64;
 
+/// The set the mesh-generating passes run in; order after it to read this
+/// frame's mesh.
 #[derive(SystemSet, Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SdfMeshGeneration;
 
+/// Whether the opened scene currently compiles, as the HUD reports it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum SceneState {
+    #[default]
+    Compiling,
+    /// Composition found an import with no module behind it: one still
+    /// loading, or one that names no module at all. Holds until the pipeline
+    /// compiles or fails, or a shader asset changes.
+    WaitingOnImport,
+    Compiled,
+    /// The compile error. The last good mesh stays on screen.
+    Failed(String),
+}
+
+impl SceneState {
+    fn next(self, pipeline: &CachedPipelineState) -> Self {
+        match pipeline {
+            CachedPipelineState::Ok(_) => Self::Compiled,
+            CachedPipelineState::Err(
+                ShaderCacheError::ShaderImportNotYetAvailable
+                | ShaderCacheError::ShaderNotLoaded(_),
+            ) => Self::WaitingOnImport,
+            CachedPipelineState::Err(error) => Self::Failed(error.to_string()),
+            CachedPipelineState::Queued | CachedPipelineState::Creating(_) => match self {
+                Self::WaitingOnImport => Self::WaitingOnImport,
+                _ => Self::Compiling,
+            },
+        }
+    }
+}
+
+/// The [`SceneState`], written in the render world and read in the main world;
+/// inserted into both.
+#[derive(Resource, Clone, Default)]
+pub struct SceneStatus(Arc<Mutex<SceneState>>);
+
+impl SceneStatus {
+    /// The current state, or [`SceneState::Compiling`] if the mutex is poisoned.
+    pub fn get(&self) -> SceneState {
+        self.0.lock().map(|s| s.clone()).unwrap_or_default()
+    }
+
+    fn advance(&self, pipeline: &CachedPipelineState) {
+        if let Ok(mut current) = self.0.lock() {
+            *current = std::mem::take(&mut *current).next(pipeline);
+        }
+    }
+}
+
+fn forget_import_wait_on_shader_change(
+    mut events: MessageReader<AssetEvent<Shader>>,
+    status: Res<SceneStatus>,
+) {
+    if events.read().count() == 0 {
+        return;
+    }
+    if let Ok(mut current) = status.0.lock()
+        && *current == SceneState::WaitingOnImport
+    {
+        *current = SceneState::Compiling;
+    }
+}
+
+/// Queues and dispatches the field and meshing passes for the opened scene.
+///
+/// Requires [`MeshProject`] in the main world before the plugin is added.
 pub struct SdfComputePlugin;
 
 impl Plugin for SdfComputePlugin {
     fn build(&self, app: &mut App) {
+        let project = app
+            .world()
+            .get_resource::<MeshProject>()
+            .expect("MeshProject must be inserted before SdfComputePlugin")
+            .clone();
+        let status = SceneStatus::default();
+        app.insert_resource(status.clone())
+            .add_systems(PostUpdate, forget_import_wait_on_shader_change);
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
         };
         render_app
+            .insert_resource(project)
+            .insert_resource(status)
             .add_systems(RenderStartup, init_pipelines)
             .add_systems(
                 RenderGraph,
@@ -64,13 +144,15 @@ impl Plugin for SdfComputePlugin {
     }
 }
 
+/// The queued pipelines and bind group layouts of the three passes, in the
+/// render world once `RenderStartup` has run.
 #[derive(Resource)]
 pub struct SdfPipelines {
     #[expect(
         dead_code,
-        reason = "strong handles keep imported shader libraries loaded"
+        reason = "strong handles keep the scene, the entry module and the meshing shader loaded"
     )]
-    libraries: Vec<Handle<Shader>>,
+    modules: Vec<Handle<Shader>>,
     field_layout: BindGroupLayoutDescriptor,
     mesh_layout: BindGroupLayoutDescriptor,
     evaluate: CachedComputePipelineId,
@@ -82,6 +164,7 @@ fn init_pipelines(
     mut commands: Commands,
     asset_server: Res<AssetServer>,
     pipeline_cache: Res<PipelineCache>,
+    project: Res<MeshProject>,
 ) {
     let field_layout = BindGroupLayoutDescriptor::new(
         "sdf_field_layout",
@@ -109,18 +192,17 @@ fn init_pipelines(
         ),
     );
 
-    let libraries = SHADER_LIBRARIES
-        .iter()
-        .map(|path| asset_server.load::<Shader>(*path))
-        .collect();
-
-    let sdf_shader = asset_server.load(SDF_EVAL_SHADER);
+    let scene = asset_server.load::<Shader>(project.scene_asset_path());
+    let sdf_shader = asset_server.add(Shader::from_wesl(
+        entry_module_source(&project.scene_module),
+        ENTRY_ASSET,
+    ));
     let meshing_shader = asset_server.load(MARCHING_CUBES_SHADER);
 
     let evaluate = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
         label: Some("sdf_evaluate".into()),
         layout: vec![field_layout.clone()],
-        shader: sdf_shader,
+        shader: sdf_shader.clone(),
         entry_point: Some("evaluate".into()),
         ..default()
     });
@@ -136,13 +218,13 @@ fn init_pipelines(
     let march = pipeline_cache.queue_compute_pipeline(ComputePipelineDescriptor {
         label: Some("sdf_marching_cubes".into()),
         layout: vec![mesh_layout.clone()],
-        shader: meshing_shader,
+        shader: meshing_shader.clone(),
         entry_point: Some("march".into()),
         ..default()
     });
 
     commands.insert_resource(SdfPipelines {
-        libraries,
+        modules: vec![scene, sdf_shader, meshing_shader],
         field_layout,
         mesh_layout,
         evaluate,
@@ -166,7 +248,10 @@ fn run_sdf_passes(
     grid: Res<SdfGrid>,
     buffers: Res<SdfBuffers>,
     clock: Res<SdfClock>,
+    status: Res<SceneStatus>,
 ) {
+    status.advance(pipeline_cache.get_compute_pipeline_state(pipelines.evaluate));
+
     let (Some(evaluate), Some(prepare), Some(march)) = (
         pipeline_cache.get_compute_pipeline(pipelines.evaluate),
         pipeline_cache.get_compute_pipeline(pipelines.prepare),
@@ -249,4 +334,24 @@ fn run_sdf_passes(
     let cell_groups = (grid.resolution - 1).div_ceil(FIELD_WORKGROUP);
     pass.set_pipeline(march);
     pass.dispatch_workgroups(cell_groups, cell_groups, cell_groups);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pins that an import wait holds through bevy's queued/creating retry frames instead of flickering to compiling.
+    #[test]
+    fn an_import_wait_survives_the_retry_cycle_until_the_pipeline_settles() {
+        let waiting = SceneState::Compiling.next(&CachedPipelineState::Err(
+            ShaderCacheError::ShaderImportNotYetAvailable,
+        ));
+        assert_eq!(waiting, SceneState::WaitingOnImport);
+        let waiting = waiting.next(&CachedPipelineState::Queued);
+        assert_eq!(waiting, SceneState::WaitingOnImport);
+        assert_eq!(
+            SceneState::Compiled.next(&CachedPipelineState::Queued),
+            SceneState::Compiling
+        );
+    }
 }

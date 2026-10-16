@@ -1,3 +1,6 @@
+//! The surface material of the mesh: triplanar texture layers selected by the
+//! per-vertex material weights, and the texture arrays it samples.
+
 use bevy::{
     asset::RenderAssetUsages,
     image::{
@@ -13,12 +16,16 @@ use bevy::{
     shader::ShaderRef,
 };
 
-use crate::sdf::MATERIAL_SLOTS;
+use crate::{sdf::MATERIAL_SLOTS, shaders::TRIPLANAR_SHADER};
 
-const TRIPLANAR_SHADER: &str = "shaders/triplanar.wesl";
+/// The named asset source holding the editor's own assets, rooted at this
+/// repo's `assets/`; the default source is the opened mesh project.
+pub const EDITOR_ASSETS: &str = "editor";
 const LAYER_SIZE: u32 = 256;
 const MIP_LEVELS: u32 = 9;
 
+/// How many material layers a fragment blends; must equal `BLEND_SLOTS` in
+/// `triplanar.wesl`, which a test checks.
 pub const BLEND_SLOTS: u32 = 2;
 
 pub type SdfSurfaceMaterial = ExtendedMaterial<StandardMaterial, TriplanarExtension>;
@@ -31,9 +38,12 @@ pub enum PbrChannel {
     Emissive,
 }
 
+/// Where one material layer's source images live.
 #[derive(Clone, Debug)]
 pub struct MaterialSource {
     pub name: String,
+    /// An asset path including its source, `editor://materials/<name>`: the
+    /// default source is the opened mesh project, not this repo.
     pub dir: String,
 }
 
@@ -135,7 +145,7 @@ impl Default for MaterialManifest {
                 .into_iter()
                 .map(|name| MaterialSource {
                     name: name.to_owned(),
-                    dir: format!("materials/{name}"),
+                    dir: format!("{EDITOR_ASSETS}://materials/{name}"),
                 })
                 .collect(),
             channels: vec![
