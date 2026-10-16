@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bevy's system libraries
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libasound2-dev libudev-dev libwayland-dev libxkbcommon-dev
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - name: Format
+        run: cargo fmt --all -- --check
+      - name: Check
+        run: cargo check --all-targets
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test
+
+  tag:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    needs: ci
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: tag-main
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Tag the build v0.<n+1>
+        run: |
+          if git tag --points-at "$GITHUB_SHA" | grep -q '^v0\.'; then
+            echo "$GITHUB_SHA is already tagged"
+            exit 0
+          fi
+          last=$(git tag --list 'v0.*' --sort=-v:refname | head -1)
+          next="v0.$(( ${last#v0.} + 1 ))"
+          git tag "$next" "$GITHUB_SHA"
+          git push origin "$next"
+          echo "Tagged $GITHUB_SHA as $next" >> "$GITHUB_STEP_SUMMARY"

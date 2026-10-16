@@ -17,6 +17,11 @@ just new-scene ../my_game boulder          # scaffolds <package root>/boulder.we
 just test
 ```
 
+To add the editor to a mesh project without a checkout, pin a tag (every green
+push to `main` is tagged `v0.<n>`) with mise:
+`mise use cargo:https://github.com/julianbieber/sdf_mesh@tag:v0.1`, then run
+`sdf_mesh shaders/boulder.wesl`.
+
 The HUD names the open scene and whether it compiled. A scene that fails to
 compile leaves the last good mesh on screen and shows the error. An import that
 resolves to no module shows as "waiting on an import"; the log names it.
