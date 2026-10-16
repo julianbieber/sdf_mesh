@@ -520,7 +520,7 @@ fn downsample(level: &[f32], width: usize) -> Vec<f32> {
 }
 
 fn renormalise(level: &mut [f32]) {
-    for texel in level.chunks_exact_mut(4) {
+    for texel in level.as_chunks_mut::<4>().0 {
         let normal = Vec3::new(
             texel[0] * 2.0 - 1.0,
             texel[1] * 2.0 - 1.0,
@@ -567,7 +567,9 @@ fn array_image(data: Vec<u8>, size: u32, layers: u32, mips: u32, srgb: bool) -> 
 
 fn encode(level: &[f32], srgb: bool) -> Vec<u8> {
     level
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .flat_map(|texel| {
             [
                 quantise(texel[0], srgb),

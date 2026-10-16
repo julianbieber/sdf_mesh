@@ -211,7 +211,7 @@ fn update_hud(
         "{path}  -  edit and save to remesh\n\
          scene: {scene_line}\n\
          grid {res}^3   budget {budget} verts   iso {iso}\n\
-         drag: orbit    wheel: zoom    {key:?}: bake obj\n\
+         drag: orbit    wheel: zoom    {key:?}: bake glb\n\
          bake: {bake_line}\n\
          fps {fps:.0}",
         path = scene.project.scene_file.display(),

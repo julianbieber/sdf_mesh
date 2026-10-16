@@ -1,12 +1,16 @@
+//! Bakes the live generated SDF mesh to a binary glTF file on disk when the
+//! bake key is pressed.
+
+mod gltf;
+
 use std::{
-    fmt::Write as _,
     fs, io,
     path::{Path, PathBuf},
 };
 
 use bevy::{
     asset::RenderAssetUsages,
-    mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
+    mesh::{Indices, PrimitiveTopology},
     prelude::*,
     render::{
         RenderApp,
@@ -23,13 +27,18 @@ use crate::sdf::{
     SdfBuffers, SdfCounters, SdfGrid, VERTEX_STRIDE_F32, pipeline::SdfMeshGeneration,
 };
 
+/// Pressing this key while no bake is in flight starts one.
 pub const BAKE_KEY: KeyCode = KeyCode::KeyB;
-const OUTPUT_PATH: &str = "bake/sdf_surface.obj";
+const OUTPUT_PATH: &str = "bake/sdf_surface.glb";
 
+/// Raised for exactly the one frame in which a bake starts; in that frame the
+/// render world copies the generated mesh into the bake readback buffers.
 #[derive(Resource, Clone, Copy, Default, ExtractResource)]
 #[extract_app(RenderApp)]
 pub struct BakeRequest(pub bool);
 
+/// The bake in progress. `status` is the human-readable outcome of the latest
+/// bake: `None` before the first one, `"baking"` while one is in flight.
 #[derive(Resource, Default)]
 pub struct BakeState {
     in_flight: bool,
@@ -47,6 +56,9 @@ impl BakeState {
     }
 }
 
+/// Bakes on [`BAKE_KEY`] to `bake/sdf_surface.glb`. Requires the SDF plugin:
+/// it reads `SdfBuffers` and `SdfGrid`, and orders its GPU copy after
+/// `SdfMeshGeneration` in the render graph.
 pub struct BakePlugin;
 
 impl Plugin for BakePlugin {
@@ -145,7 +157,21 @@ fn finish_bake(mut state: ResMut<BakeState>, grid: Res<SdfGrid>) {
     let mesh = assemble_mesh(&vertices, &indices, &counters, &grid);
     let triangles = mesh.indices().map_or(0, |i| i.len() / 3);
 
-    state.status = Some(match write_obj(Path::new(OUTPUT_PATH), &mesh) {
+    let bytes = match gltf::mesh_to_glb(&mesh) {
+        Ok(bytes) => bytes,
+        Err(error @ (gltf::GlbError::NoTriangles | gltf::GlbError::NonFinitePosition)) => {
+            warn!("bake wrote nothing: {error}");
+            state.status = Some(format!("nothing written: {error}"));
+            return;
+        }
+        Err(error) => {
+            error!("bake failed: {error}");
+            state.status = Some(format!("bake failed: {error}"));
+            return;
+        }
+    };
+
+    state.status = Some(match write_bytes(Path::new(OUTPUT_PATH), &bytes) {
         Ok(path) => format!("{triangles} tris -> {}", path.display()),
         Err(error) => {
             error!("bake failed: {error}");
@@ -167,14 +193,23 @@ fn assemble_mesh(
 
     let mut positions = Vec::with_capacity(vertex_count);
     let mut normals = Vec::with_capacity(vertex_count);
+    let mut weights = Vec::with_capacity(vertex_count);
     for vertex in 0..vertex_count {
         let base = vertex * stride;
         positions.push([vertices[base], vertices[base + 1], vertices[base + 2]]);
         normals.push([vertices[base + 3], vertices[base + 4], vertices[base + 5]]);
+        weights.push([
+            vertices[base + 6],
+            vertices[base + 7],
+            vertices[base + 8],
+            vertices[base + 9],
+        ]);
     }
 
-    let kept: Vec<u32> = indices[..index_count - index_count % 3]
-        .chunks_exact(3)
+    let kept: Vec<u32> = indices[..index_count]
+        .as_chunks::<3>()
+        .0
+        .iter()
         .filter(|t| {
             t.iter().all(|i| (*i as usize) < vertex_count)
                 && t[0] != t[1]
@@ -191,39 +226,15 @@ fn assemble_mesh(
     )
     .with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, positions)
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
+    .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, weights)
     .with_inserted_indices(Indices::U32(kept))
 }
 
-fn write_obj(path: &Path, mesh: &Mesh) -> io::Result<PathBuf> {
-    let Some(VertexAttributeValues::Float32x3(positions)) =
-        mesh.attribute(Mesh::ATTRIBUTE_POSITION)
-    else {
-        return Err(io::Error::other("mesh has no float3 positions"));
-    };
-    let Some(VertexAttributeValues::Float32x3(normals)) = mesh.attribute(Mesh::ATTRIBUTE_NORMAL)
-    else {
-        return Err(io::Error::other("mesh has no float3 normals"));
-    };
-    let Some(Indices::U32(indices)) = mesh.indices() else {
-        return Err(io::Error::other("mesh has no u32 indices"));
-    };
-
-    let mut out = String::with_capacity(positions.len() * 48 + indices.len() * 12);
-    for p in positions {
-        let _ = writeln!(out, "v {} {} {}", p[0], p[1], p[2]);
-    }
-    for n in normals {
-        let _ = writeln!(out, "vn {} {} {}", n[0], n[1], n[2]);
-    }
-    for triangle in indices.chunks_exact(3) {
-        let (a, b, c) = (triangle[0] + 1, triangle[1] + 1, triangle[2] + 1);
-        let _ = writeln!(out, "f {a}//{a} {b}//{b} {c}//{c}");
-    }
-
+fn write_bytes(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {
     if let Some(parent) = path.parent() {
         fs::create_dir_all(parent)?;
     }
-    fs::write(path, out)?;
+    fs::write(path, bytes)?;
     Ok(path.to_path_buf())
 }
 
@@ -278,4 +289,52 @@ fn copy_bake_buffers(
         0,
         index_bytes,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vertex(position: [f32; 3], weights: [f32; 4]) -> [f32; 10] {
+        let [x, y, z] = position;
+        let [a, b, c, d] = weights;
+        [x, y, z, 0.0, 1.0, 0.0, a, b, c, d]
+    }
+
+    // Pins that assembly carries each vertex's material weights and drops degenerate or out-of-range triangles.
+    #[test]
+    fn assembly_keeps_weights_and_drops_bad_triangles() {
+        let vertices: Vec<f32> = [
+            vertex([0.0, 0.0, 0.0], [1.0, 0.0, 0.0, 0.0]),
+            vertex([1.0, 0.0, 0.0], [0.0, 1.0, 0.0, 0.0]),
+            vertex([0.0, 1.0, 0.0], [0.0, 0.0, 0.5, 0.5]),
+        ]
+        .concat();
+        let indices = vec![0, 1, 2, 0, 0, 1, 0, 1, 7];
+        let counters = SdfCounters {
+            vertex_count: 3,
+            index_count: indices.len() as u32,
+            overflow: 0,
+        };
+
+        let mesh = assemble_mesh(&vertices, &indices, &counters, &SdfGrid::default());
+
+        let Some(Indices::U32(kept)) = mesh.indices() else {
+            panic!("no u32 indices");
+        };
+        assert_eq!(kept, &vec![0, 1, 2]);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(weights)) =
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("no float4 weights");
+        };
+        assert_eq!(
+            weights,
+            &vec![
+                [1.0, 0.0, 0.0, 0.0],
+                [0.0, 1.0, 0.0, 0.0],
+                [0.0, 0.0, 0.5, 0.5]
+            ]
+        );
+    }
 }
