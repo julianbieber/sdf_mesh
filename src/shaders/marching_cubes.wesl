@@ -1,7 +1,6 @@
-import super::sdf_types::{SdfParams, FieldSample};
+import package::sdf_types::{SdfParams, FieldSample};
 
 const TRI_TABLE_ROW: u32 = 16u;
-const MATERIAL_SLOTS: u32 = 4u;
 
 struct Counters {
     vertex_count: atomic<u32>,

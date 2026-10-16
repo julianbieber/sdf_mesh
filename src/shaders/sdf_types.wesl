@@ -1,3 +1,5 @@
+const MATERIAL_SLOTS: u32 = 4u;
+
 struct FieldSample {
     weights: vec4<f32>,
     dist: f32,

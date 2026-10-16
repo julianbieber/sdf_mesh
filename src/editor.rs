@@ -1,4 +1,8 @@
+//! What the user sees and touches around the mesh: the camera, lights and
+//! orbit controls, and the on-screen status.
+
 use bevy::{
+    ecs::system::SystemParam,
     input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll},
     pbr::ExtendedMaterial,
     prelude::*,
@@ -7,7 +11,12 @@ use bevy::{
 use crate::{
     bake::{BAKE_KEY, BakeState},
     material::{SdfSurfaceMaterial, TriplanarExtension},
-    sdf::{SdfBuffers, SdfGrid, domain_aabb},
+    project::MeshProject,
+    sdf::{
+        SdfBuffers, SdfGrid, domain_aabb,
+        pipeline::{SceneState, SceneStatus},
+    },
+    shaders::ShaderLibrary,
 };
 
 const ORBIT_SPEED: f32 = 0.006;
@@ -145,9 +154,49 @@ fn spawn_hud(mut commands: Commands) {
     ));
 }
 
+#[derive(SystemParam)]
+struct SceneReport<'w> {
+    project: Res<'w, MeshProject>,
+    status: Res<'w, SceneStatus>,
+    library: Option<Res<'w, ShaderLibrary>>,
+    asset_server: Res<'w, AssetServer>,
+}
+
+impl SceneReport<'_> {
+    fn line(&self) -> String {
+        match self.status.get() {
+            SceneState::WaitingOnImport if self.everything_loaded() => {
+                "waiting on an import that does not resolve; the log names it".to_owned()
+            }
+            SceneState::WaitingOnImport => "loading".to_owned(),
+            SceneState::Compiling => "compiling".to_owned(),
+            SceneState::Compiled => "compiled".to_owned(),
+            SceneState::Failed(error) => error
+                .lines()
+                .find(|line| line.trim_start().starts_with("error"))
+                .or_else(|| error.lines().next())
+                .unwrap_or("compile error")
+                .to_owned(),
+        }
+    }
+
+    fn everything_loaded(&self) -> bool {
+        let scene_loaded = self
+            .asset_server
+            .get_handle::<Shader>(self.project.scene_asset_path())
+            .is_some_and(|scene| self.asset_server.is_loaded_with_dependencies(&scene));
+        scene_loaded
+            && self
+                .library
+                .as_ref()
+                .is_some_and(|library| library.is_loaded(&self.asset_server))
+    }
+}
+
 fn update_hud(
     grid: Res<SdfGrid>,
     bake: Res<BakeState>,
+    scene: SceneReport,
     diagnostics: Res<bevy::diagnostic::DiagnosticsStore>,
     mut hud: Single<&mut Text, With<HudText>>,
 ) {
@@ -159,11 +208,14 @@ fn update_hud(
     let bake_line = bake.status.as_deref().unwrap_or("idle");
 
     hud.0 = format!(
-        "assets/shaders/sdf.wesl  -  edit and save to remesh\n\
+        "{path}  -  edit and save to remesh\n\
+         scene: {scene_line}\n\
          grid {res}^3   budget {budget} verts   iso {iso}\n\
          drag: orbit    wheel: zoom    {key:?}: bake obj\n\
          bake: {bake_line}\n\
          fps {fps:.0}",
+        path = scene.project.scene_file.display(),
+        scene_line = scene.line(),
         res = grid.resolution,
         budget = grid.max_vertices,
         iso = grid.iso,

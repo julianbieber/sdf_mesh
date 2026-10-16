@@ -13,8 +13,8 @@ import bevy_pbr::render::{
     forward_io::{VertexOutput, FragmentOutput},
     pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
 };
+import package::sdf_types::MATERIAL_SLOTS;
 
-const MATERIAL_SLOTS: u32 = 4u;
 const BLEND_SLOTS: u32 = 2u;
 
 struct TriplanarSettings {
