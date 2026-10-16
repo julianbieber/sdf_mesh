@@ -7,10 +7,10 @@ use bevy::{
     mesh::{Indices, PrimitiveTopology},
     prelude::*,
     render::{
+        RenderApp,
         extract_resource::{ExtractResource, ExtractResourcePlugin},
         render_resource::{BufferUsages, ShaderType},
         storage::ShaderBuffer,
-        RenderApp,
     },
 };
 
