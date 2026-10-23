@@ -1,8 +1,10 @@
 //! The surface material of the mesh: triplanar texture layers selected by the
 //! per-vertex material weights, and the texture arrays it samples.
 
+use std::path::Path;
+
 use bevy::{
-    asset::RenderAssetUsages,
+    asset::{RenderAssetUsages, io::embedded::EmbeddedAssetRegistry},
     image::{
         ImageAddressMode, ImageFilterMode, ImageLoaderSettings, ImageSampler,
         ImageSamplerDescriptor, TextureFormatPixelInfo,
@@ -18,9 +20,7 @@ use bevy::{
 
 use crate::{sdf::MATERIAL_SLOTS, shaders::TRIPLANAR_SHADER};
 
-/// The named asset source holding the editor's own assets, rooted at this
-/// repo's `assets/`; the default source is the opened mesh project.
-pub const EDITOR_ASSETS: &str = "editor";
+const MATERIAL_ASSETS: &str = "embedded://sdf_mesh/materials";
 const LAYER_SIZE: u32 = 256;
 const MIP_LEVELS: u32 = 9;
 
@@ -42,8 +42,9 @@ pub enum PbrChannel {
 #[derive(Clone, Debug)]
 pub struct MaterialSource {
     pub name: String,
-    /// An asset path including its source, `editor://materials/<name>`: the
-    /// default source is the opened mesh project, not this repo.
+    /// An asset path including its source, `embedded://sdf_mesh/materials/<name>`:
+    /// the default source is the opened mesh project, so the editor's own
+    /// textures ship inside the binary.
     pub dir: String,
 }
 
@@ -145,7 +146,7 @@ impl Default for MaterialManifest {
                 .into_iter()
                 .map(|name| MaterialSource {
                     name: name.to_owned(),
-                    dir: format!("{EDITOR_ASSETS}://materials/{name}"),
+                    dir: format!("{MATERIAL_ASSETS}/{name}"),
                 })
                 .collect(),
             channels: vec![
@@ -242,6 +243,7 @@ pub struct TriplanarMaterialPlugin;
 
 impl Plugin for TriplanarMaterialPlugin {
     fn build(&self, app: &mut App) {
+        embed_textures(app);
         app.add_plugins(MaterialPlugin::<SdfSurfaceMaterial>::default())
             .init_resource::<MaterialLibrary>()
             .add_systems(Startup, load_material_manifest)
@@ -254,6 +256,42 @@ impl Plugin for TriplanarMaterialPlugin {
                 )
                     .chain(),
             );
+    }
+}
+
+macro_rules! material_textures {
+    ($material:literal) => {
+        [
+            material_textures!($material, "base_color.png"),
+            material_textures!($material, "normal.png"),
+            material_textures!($material, "orm.png"),
+            material_textures!($material, "emissive.png"),
+        ]
+    };
+    ($material:literal, $file:literal) => {
+        (
+            concat!($material, "/", $file),
+            include_bytes!(concat!("../assets/materials/", $material, "/", $file)).as_slice(),
+        )
+    };
+}
+
+const TEXTURES: [[(&str, &[u8]); 4]; 4] = [
+    material_textures!("stone"),
+    material_textures!("sand"),
+    material_textures!("moss"),
+    material_textures!("lava"),
+];
+
+fn embed_textures(app: &mut App) {
+    let registry = app.world().resource::<EmbeddedAssetRegistry>();
+    let source_dir = Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/materials");
+    for (path, bytes) in TEXTURES.into_iter().flatten() {
+        registry.insert_asset(
+            source_dir.join(path),
+            &Path::new("sdf_mesh/materials").join(path),
+            bytes,
+        );
     }
 }
 

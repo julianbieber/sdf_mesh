@@ -1,36 +1,52 @@
-//! Entry point: opens the viewer on the scene file named on the command line,
-//! or on the example project's scene when none is.
+//! Entry point: the command line, which opens the viewer on a scene or
+//! scaffolds files into a mesh project.
 
 mod bake;
 mod editor;
 mod material;
 mod project;
+mod scaffold;
 mod sdf;
 mod shaders;
 
-use std::path::{Path, PathBuf};
+use std::ffi::OsString;
+use std::path::Path;
 
-use bevy::{
-    asset::{AssetMetaCheck, io::AssetSourceBuilder},
-    diagnostic::FrameTimeDiagnosticsPlugin,
-    prelude::*,
-};
+use bevy::{asset::AssetMetaCheck, diagnostic::FrameTimeDiagnosticsPlugin, prelude::*};
 
-use project::MeshProject;
+use project::{MeshProject, ProjectError};
+
+const USAGE: &str = "usage:
+  sdf_mesh <scene.wesl>        open the viewer on a scene; edits hot reload
+  sdf_mesh new <scene.wesl>    write a unit-sphere scene into a mesh project
+  sdf_mesh package <dir>       write this build's sdf_mesh WESL package into <dir>";
 
 fn main() -> AppExit {
-    let manifest_dir = Path::new(env!("CARGO_MANIFEST_DIR"));
-    let scene = std::env::args_os()
-        .nth(1)
-        .map(PathBuf::from)
-        .unwrap_or_else(|| manifest_dir.join("example/shaders/scene.wesl"));
-    let project = match MeshProject::open(&scene) {
-        Ok(project) => project,
-        Err(e) => {
-            eprintln!("{e}");
-            std::process::exit(1);
+    let args: Vec<OsString> = std::env::args_os().skip(1).collect();
+    let args: Vec<&OsString> = args.iter().collect();
+    let outcome = match args.as_slice() {
+        [command, scene] if *command == "new" => {
+            scaffold::new_scene(Path::new(scene)).map(|scene| println!("wrote {}", scene.display()))
+        }
+        [command, dir] if *command == "package" => scaffold::write_package(Path::new(dir))
+            .map(|()| println!("wrote the sdf_mesh package to {}", Path::new(dir).display())),
+        [scene] if !scene.to_string_lossy().starts_with('-') => {
+            return MeshProject::open(Path::new(scene)).map_or_else(exit_with, view);
+        }
+        _ => {
+            eprintln!("{USAGE}");
+            return AppExit::from_code(2);
         }
     };
+    outcome.map_or_else(exit_with, |()| AppExit::Success)
+}
+
+fn exit_with(error: ProjectError) -> AppExit {
+    eprintln!("{error}");
+    AppExit::from_code(1)
+}
+
+fn view(project: MeshProject) -> AppExit {
     for name in project.foreign_dependencies() {
         eprintln!(
             "warning: `{}` declares the dependency `{name}`, which the editor does not provide; \
@@ -38,15 +54,18 @@ fn main() -> AppExit {
             project.toml_dir.join("wesl.toml").display()
         );
     }
+    if let Some((copy, drifted)) = project.library_copy_drift() {
+        eprintln!(
+            "warning: the language server reads `{}` from `{}`, which differs from the package \
+             this editor embeds ({}); run `sdf_mesh package {}` to rewrite it",
+            shaders::PACKAGE,
+            copy.display(),
+            drifted.join(", "),
+            copy.display()
+        );
+    }
 
     App::new()
-        .register_asset_source(
-            material::EDITOR_ASSETS,
-            AssetSourceBuilder::platform_default(
-                &manifest_dir.join("assets").to_string_lossy(),
-                None,
-            ),
-        )
         .add_plugins(
             DefaultPlugins
                 .set(AssetPlugin {

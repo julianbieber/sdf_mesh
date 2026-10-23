@@ -18,6 +18,13 @@ pub const MODULE_ASSETS: [&str; 2] = [
     "embedded://sdf_mesh/sdf_lib.wesl",
 ];
 
+/// The file name and source of each library module a scene may import, as
+/// embedded in this build.
+pub const LIBRARY_SOURCES: [(&str, &str); 2] = [
+    ("sdf_types.wesl", include_str!("sdf_types.wesl")),
+    ("sdf_lib.wesl", include_str!("sdf_lib.wesl")),
+];
+
 /// The embedded asset path of the meshing compute shader.
 pub const MARCHING_CUBES_SHADER: &str = "embedded://sdf_mesh/marching_cubes.wesl";
 
