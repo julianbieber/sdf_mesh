@@ -1,6 +1,5 @@
-# A mesh project as any consumer of the editor would set one up.
+# A mesh project depending on this checkout, so the language server reads the package source being edited.
 edition = "2026_pre"
-package-manager = "cargo"
 root = "shaders"
 
 [dependencies]

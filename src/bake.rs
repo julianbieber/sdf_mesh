@@ -23,13 +23,13 @@ use bevy::{
     },
 };
 
+use crate::project::MeshProject;
 use crate::sdf::{
     SdfBuffers, SdfCounters, SdfGrid, VERTEX_STRIDE_F32, pipeline::SdfMeshGeneration,
 };
 
 /// Pressing this key while no bake is in flight starts one.
 pub const BAKE_KEY: KeyCode = KeyCode::KeyB;
-const OUTPUT_PATH: &str = "bake/sdf_surface.glb";
 
 /// Raised for exactly the one frame in which a bake starts; in that frame the
 /// render world copies the generated mesh into the bake readback buffers.
@@ -56,7 +56,7 @@ impl BakeState {
     }
 }
 
-/// Bakes on [`BAKE_KEY`] to `bake/sdf_surface.glb`. Requires the SDF plugin:
+/// Bakes on [`BAKE_KEY`] to [`MeshProject::bake_file`]. Requires the SDF plugin:
 /// it reads `SdfBuffers` and `SdfGrid`, and orders its GPU copy after
 /// `SdfMeshGeneration` in the render graph.
 pub struct BakePlugin;
@@ -133,7 +133,7 @@ fn start_bake(
         );
 }
 
-fn finish_bake(mut state: ResMut<BakeState>, grid: Res<SdfGrid>) {
+fn finish_bake(mut state: ResMut<BakeState>, grid: Res<SdfGrid>, project: Res<MeshProject>) {
     if !state.in_flight
         || state.vertices.is_none()
         || state.indices.is_none()
@@ -171,7 +171,7 @@ fn finish_bake(mut state: ResMut<BakeState>, grid: Res<SdfGrid>) {
         }
     };
 
-    state.status = Some(match write_bytes(Path::new(OUTPUT_PATH), &bytes) {
+    state.status = Some(match write_bytes(&project.bake_file(), &bytes) {
         Ok(path) => format!("{triangles} tris -> {}", path.display()),
         Err(error) => {
             error!("bake failed: {error}");

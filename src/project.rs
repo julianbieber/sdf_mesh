@@ -7,9 +7,9 @@ use std::path::{Path, PathBuf};
 
 use bevy::prelude::*;
 use wesl::package::PackageModule;
-use wesl::toml_cfg::{DependenciesConfig, WeslToml, scan_from_config};
+use wesl::toml_cfg::{DependenciesConfig, DependencySpec, WeslToml, scan_from_config};
 
-use crate::shaders::PACKAGE;
+use crate::shaders::{LIBRARY_SOURCES, PACKAGE};
 
 /// Why a scene file could not be opened.
 #[derive(Debug)]
@@ -114,6 +114,43 @@ impl MeshProject {
         format!("{}.wesl", self.scene_module.join("/"))
     }
 
+    /// Where a bake of this scene is written: `bake/<scene module path>.glb`
+    /// beside the project's `wesl.toml`.
+    pub fn bake_file(&self) -> PathBuf {
+        self.toml_dir
+            .join("bake")
+            .join(format!("{}.glb", self.scene_module.join("/")))
+    }
+
+    /// The library modules that the copy of this package named by the
+    /// project's `sdf_mesh = { path = … }` dependency lacks or holds a
+    /// different version of, with that copy's directory. `None` when the
+    /// project declares no such dependency, or the copy matches the modules
+    /// the editor embeds. A copy whose `wesl.toml` is missing or unreadable
+    /// counts as lacking every module.
+    pub fn library_copy_drift(&self) -> Option<(PathBuf, Vec<&'static str>)> {
+        let DependenciesConfig::Manual(dependencies) = &self.config.dependencies else {
+            return None;
+        };
+        let Some(DependencySpec::Path(path)) = dependencies.get(PACKAGE) else {
+            return None;
+        };
+        let copy = self.toml_dir.join(path);
+        let root = WeslToml::from_file(copy.join("wesl.toml"))
+            .ok()
+            .map(|config| copy.join(config.package.root));
+        let drifted: Vec<&'static str> = LIBRARY_SOURCES
+            .iter()
+            .filter(|(file, source)| {
+                root.as_ref()
+                    .and_then(|root| std::fs::read_to_string(root.join(file)).ok())
+                    .is_none_or(|on_disk| on_disk != *source)
+            })
+            .map(|(file, _)| *file)
+            .collect();
+        (!drifted.is_empty()).then_some((copy, drifted))
+    }
+
     /// The names of dependencies other than this package that the project's
     /// `wesl.toml` declares, including this package declared under another
     /// name. The editor resolves none of them, so a scene importing one never
@@ -174,6 +211,52 @@ mod tests {
             dir.join("shaders").canonicalize().unwrap()
         );
         assert_eq!(project.foreign_dependencies(), ["other"]);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    // Pins that a bake lands beside the project's wesl.toml, named after the scene module.
+    #[test]
+    fn a_bake_is_written_into_the_scene_project() {
+        let dir = project_dir(
+            "bake",
+            &[("wesl.toml", TOML), ("shaders/rocks/boulder.wesl", "")],
+        );
+        let project = MeshProject::open(&dir.join("shaders/rocks/boulder.wesl")).unwrap();
+        assert_eq!(
+            project.bake_file(),
+            dir.canonicalize().unwrap().join("bake/rocks/boulder.glb")
+        );
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    // Pins that the example project, whose dependency is this checkout, sees no drift.
+    #[test]
+    fn the_example_project_library_copy_matches_the_embedded_one() {
+        let project = MeshProject::open(Path::new("example/shaders/scene.wesl")).unwrap();
+        assert_eq!(project.library_copy_drift(), None);
+    }
+
+    // Pins that a copy of the library is compared module by module against the embedded one.
+    #[test]
+    fn an_edited_library_copy_is_reported_by_module() {
+        let (types, types_source) = LIBRARY_SOURCES[0];
+        let (lib, _) = LIBRARY_SOURCES[1];
+        let dir = project_dir(
+            "drift",
+            &[
+                (
+                    "project/wesl.toml",
+                    TOML.replace("\"..\"", "\"../copy\"").as_str(),
+                ),
+                ("project/shaders/scene.wesl", ""),
+                ("copy/wesl.toml", "edition = \"2026_pre\"\nroot = \".\"\n"),
+                (&format!("copy/{types}"), types_source),
+                (&format!("copy/{lib}"), "// edited\n"),
+            ],
+        );
+        let project = MeshProject::open(&dir.join("project/shaders/scene.wesl")).unwrap();
+        let (_, drifted) = project.library_copy_drift().unwrap();
+        assert_eq!(drifted, [lib]);
         std::fs::remove_dir_all(dir).unwrap();
     }
 
