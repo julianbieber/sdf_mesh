@@ -1,3 +1,8 @@
+//! Generates the opened scene's mesh on the GPU every frame: the grid it is
+//! sampled on, and the buffers and clock the generating passes share with
+//! whatever reads their output.
+
+pub mod joints;
 pub mod pipeline;
 pub mod tables;
 
@@ -72,6 +77,10 @@ pub struct SdfBuffers {
     pub counters: Handle<ShaderBuffer>,
     pub bake_vertices: Handle<ShaderBuffer>,
     pub bake_indices: Handle<ShaderBuffer>,
+    /// The [`Skin`] of each vertex of the generated mesh, by vertex index.
+    pub skins: Handle<ShaderBuffer>,
+    /// The [`JointSample`]s of the latest joint sampling, keyframe-major.
+    pub joint_samples: Handle<ShaderBuffer>,
     pub mesh: Handle<Mesh>,
 }
 
@@ -93,10 +102,27 @@ pub struct SdfParams {
     pub time: f32,
 }
 
+/// Up to four joints a point follows, with weights summing to one.
+#[derive(ShaderType, Clone, Copy, Default, Debug, PartialEq)]
+pub struct Skin {
+    pub joints: UVec4,
+    pub weights: Vec4,
+}
+
 #[derive(ShaderType, Clone, Copy, Default, Debug)]
 pub struct FieldSample {
     pub weights: Vec4,
     pub dist: f32,
+    pub skin: Skin,
+}
+
+/// A joint's rigid transform in model space, as the scene's `sdf_joint`
+/// returns it: `rotation` is an `(x, y, z, w)` quaternion, not necessarily
+/// normalized.
+#[derive(ShaderType, Clone, Copy, Default, Debug, PartialEq)]
+pub struct JointSample {
+    pub translation: Vec3,
+    pub rotation: Vec4,
 }
 
 #[derive(ShaderType, Clone, Copy, Default, Debug)]
@@ -117,13 +143,14 @@ impl Plugin for SdfPlugin {
                 ExtractResourcePlugin::<SdfBuffers>::default(),
                 ExtractResourcePlugin::<SdfClock>::default(),
                 pipeline::SdfComputePlugin,
+                joints::JointSamplerPlugin,
             ))
             .add_systems(PreStartup, create_sdf_buffers)
             .add_systems(Update, advance_clock);
     }
 }
 
-fn advance_clock(time: Res<Time>, mut clock: ResMut<SdfClock>) {
+pub fn advance_clock(time: Res<Time>, mut clock: ResMut<SdfClock>) {
     clock.0 = time.elapsed_secs();
 }
 
@@ -162,6 +189,18 @@ fn create_sdf_buffers(
         BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
     ));
 
+    let skins = buffers.add(sized_buffer(
+        "sdf_skins",
+        grid.max_vertices as u64 * Skin::min_size().get(),
+        BufferUsages::STORAGE | BufferUsages::COPY_SRC,
+    ));
+
+    let joint_samples = buffers.add(sized_buffer(
+        "sdf_joint_samples",
+        crate::rig::MAX_SAMPLES as u64 * JointSample::min_size().get(),
+        BufferUsages::STORAGE | BufferUsages::COPY_SRC | BufferUsages::COPY_DST,
+    ));
+
     let mesh = meshes.add(placeholder_mesh(&grid));
 
     commands.insert_resource(SdfBuffers {
@@ -170,6 +209,8 @@ fn create_sdf_buffers(
         counters,
         bake_vertices,
         bake_indices,
+        skins,
+        joint_samples,
         mesh,
     });
 }

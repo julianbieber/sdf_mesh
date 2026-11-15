@@ -5,6 +5,7 @@ mod bake;
 mod editor;
 mod material;
 mod project;
+mod rig;
 mod scaffold;
 mod sdf;
 mod shaders;

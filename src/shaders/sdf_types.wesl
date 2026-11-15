@@ -1,8 +1,14 @@
 const MATERIAL_SLOTS: u32 = 4u;
 
+struct Skin {
+    joints: vec4<u32>,
+    weights: vec4<f32>,
+}
+
 struct FieldSample {
     weights: vec4<f32>,
     dist: f32,
+    skin: Skin,
 }
 
 struct SdfParams {

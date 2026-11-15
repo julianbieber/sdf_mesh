@@ -22,7 +22,7 @@ use bevy::{
 };
 
 use super::{
-    FieldSample, SdfBuffers, SdfClock, SdfCounters, SdfGrid, SdfParams, VERTEX_STRIDE_F32,
+    FieldSample, SdfBuffers, SdfClock, SdfCounters, SdfGrid, SdfParams, Skin, VERTEX_STRIDE_F32,
 };
 use crate::{
     project::MeshProject,
@@ -188,6 +188,7 @@ fn init_pipelines(
                 storage_buffer::<SdfCounters>(false),
                 storage_buffer::<Vec<f32>>(false),
                 storage_buffer::<Vec<u32>>(false),
+                storage_buffer::<Vec<Skin>>(false),
             ),
         ),
     );
@@ -260,10 +261,11 @@ fn run_sdf_passes(
         return;
     };
 
-    let (Some(field), Some(tri_table), Some(counters)) = (
+    let (Some(field), Some(tri_table), Some(counters), Some(skins)) = (
         gpu_buffers.get(&buffers.field),
         gpu_buffers.get(&buffers.tri_table),
         gpu_buffers.get(&buffers.counters),
+        gpu_buffers.get(&buffers.skins),
     ) else {
         return;
     };
@@ -312,6 +314,7 @@ fn run_sdf_passes(
             counters.buffer.as_entire_buffer_binding(),
             vertex_slice.buffer.as_entire_buffer_binding(),
             index_slice.buffer.as_entire_buffer_binding(),
+            skins.buffer.as_entire_buffer_binding(),
         )),
     );
 
