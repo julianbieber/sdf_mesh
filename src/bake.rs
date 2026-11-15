@@ -2,6 +2,7 @@
 //! bake key is pressed.
 
 mod gltf;
+mod skin;
 
 use std::{
     fs, io,
@@ -10,7 +11,7 @@ use std::{
 
 use bevy::{
     asset::RenderAssetUsages,
-    mesh::{Indices, PrimitiveTopology},
+    mesh::{Indices, PrimitiveTopology, VertexAttributeValues},
     prelude::*,
     render::{
         RenderApp,
@@ -24,9 +25,18 @@ use bevy::{
 };
 
 use crate::project::MeshProject;
+use crate::rig::{Rig, read_rig};
 use crate::sdf::{
-    SdfBuffers, SdfCounters, SdfGrid, VERTEX_STRIDE_F32, pipeline::SdfMeshGeneration,
+    JointSample, SdfBuffers, SdfClock, SdfCounters, SdfGrid, Skin, VERTEX_STRIDE_F32,
+    advance_clock,
+    joints::{JointSamplerStatus, JointSamplingRequest},
+    pipeline::SdfMeshGeneration,
 };
+use skin::{SkinAnimation, skin_attributes};
+
+/// The scene time a rigged scene is meshed at when baked: its rest pose, and
+/// keyframe 0 of its animation.
+pub const REST_TIME: f32 = 0.0;
 
 /// Pressing this key while no bake is in flight starts one.
 pub const BAKE_KEY: KeyCode = KeyCode::KeyB;
@@ -42,9 +52,12 @@ pub struct BakeRequest(pub bool);
 #[derive(Resource, Default)]
 pub struct BakeState {
     in_flight: bool,
+    rig: Option<Rig>,
     vertices: Option<Vec<f32>>,
     indices: Option<Vec<u32>>,
     counters: Option<SdfCounters>,
+    skins: Option<Vec<Skin>>,
+    joint_samples: Option<Vec<JointSample>>,
     pub status: Option<String>,
 }
 
@@ -53,11 +66,22 @@ impl BakeState {
         self.vertices = None;
         self.indices = None;
         self.counters = None;
+        self.skins = None;
+        self.joint_samples = None;
+    }
+
+    fn readbacks_complete(&self) -> bool {
+        self.vertices.is_some()
+            && self.indices.is_some()
+            && self.counters.is_some()
+            && (self.rig.is_none() || (self.skins.is_some() && self.joint_samples.is_some()))
     }
 }
 
-/// Bakes on [`BAKE_KEY`] to [`MeshProject::bake_file`]. Requires the SDF plugin:
-/// it reads `SdfBuffers` and `SdfGrid`, and orders its GPU copy after
+/// Bakes on [`BAKE_KEY`] to [`MeshProject::bake_file`]. A scene that declares
+/// a rig is meshed at [`REST_TIME`] for that one frame, and bakes with its
+/// skin and animation. Requires the SDF plugin: it reads `SdfBuffers` and
+/// `SdfGrid`, sets `SdfClock`, and orders its GPU copy after
 /// `SdfMeshGeneration` in the render graph.
 pub struct BakePlugin;
 
@@ -66,7 +90,12 @@ impl Plugin for BakePlugin {
         app.init_resource::<BakeRequest>()
             .init_resource::<BakeState>()
             .add_plugins(ExtractResourcePlugin::<BakeRequest>::default())
-            .add_systems(Update, (clear_request, start_bake, finish_bake).chain());
+            .add_systems(
+                Update,
+                (clear_request, start_bake, finish_bake)
+                    .chain()
+                    .after(advance_clock),
+            );
 
         let Some(render_app) = app.get_sub_app_mut(RenderApp) else {
             return;
@@ -80,17 +109,28 @@ impl Plugin for BakePlugin {
     }
 }
 
-fn clear_request(mut request: ResMut<BakeRequest>) {
+fn clear_request(mut request: ResMut<BakeRequest>, mut joints: ResMut<JointSamplingRequest>) {
     if request.0 {
         request.0 = false;
     }
+    if joints.0.is_some() {
+        joints.0 = None;
+    }
 }
 
+#[expect(
+    clippy::too_many_arguments,
+    reason = "starting a bake touches the clock, both requests and the readbacks"
+)]
 fn start_bake(
     mut commands: Commands,
     keys: Res<ButtonInput<KeyCode>>,
     buffers: Option<Res<SdfBuffers>>,
+    project: Res<MeshProject>,
+    sampler: Res<JointSamplerStatus>,
+    mut clock: ResMut<SdfClock>,
     mut request: ResMut<BakeRequest>,
+    mut joints: ResMut<JointSamplingRequest>,
     mut state: ResMut<BakeState>,
 ) {
     let Some(buffers) = buffers else {
@@ -100,10 +140,52 @@ fn start_bake(
         return;
     }
 
+    let rig = match std::fs::read_to_string(&project.scene_file)
+        .map_err(|e| e.to_string())
+        .and_then(|source| read_rig(&source).map_err(|e| e.to_string()))
+    {
+        Ok(rig) => rig,
+        Err(error) => {
+            warn!("bake wrote nothing: {error}");
+            state.status = Some(format!("nothing written: {error}"));
+            return;
+        }
+    };
+    if rig.is_some() && !sampler.is_ready() {
+        state.status = Some("nothing written: sdf_joint has not compiled".to_owned());
+        return;
+    }
+
     state.clear_readbacks();
     state.in_flight = true;
+    state.rig = rig;
     state.status = Some("baking".to_owned());
     request.0 = true;
+
+    if let Some(rig) = rig {
+        clock.0 = REST_TIME;
+        joints.0 = Some(rig);
+        commands
+            .spawn(Readback::buffer(buffers.skins.clone()))
+            .observe(
+                |event: On<ReadbackComplete>,
+                 mut commands: Commands,
+                 mut state: ResMut<BakeState>| {
+                    state.skins = Some(event.to_shader_type());
+                    commands.entity(event.entity).despawn();
+                },
+            );
+        commands
+            .spawn(Readback::buffer(buffers.joint_samples.clone()))
+            .observe(
+                |event: On<ReadbackComplete>,
+                 mut commands: Commands,
+                 mut state: ResMut<BakeState>| {
+                    state.joint_samples = Some(event.to_shader_type());
+                    commands.entity(event.entity).despawn();
+                },
+            );
+    }
 
     commands
         .spawn(Readback::buffer(buffers.counters.clone()))
@@ -134,17 +216,15 @@ fn start_bake(
 }
 
 fn finish_bake(mut state: ResMut<BakeState>, grid: Res<SdfGrid>, project: Res<MeshProject>) {
-    if !state.in_flight
-        || state.vertices.is_none()
-        || state.indices.is_none()
-        || state.counters.is_none()
-    {
+    if !state.in_flight || !state.readbacks_complete() {
         return;
     }
 
     let vertices = state.vertices.take().expect("checked above");
     let indices = state.indices.take().expect("checked above");
     let counters = state.counters.take().expect("checked above");
+    let skins = state.skins.take();
+    let joint_samples = state.joint_samples.take();
     state.in_flight = false;
 
     if counters.overflow != 0 {
@@ -154,10 +234,28 @@ fn finish_bake(mut state: ResMut<BakeState>, grid: Res<SdfGrid>, project: Res<Me
         );
     }
 
-    let mesh = assemble_mesh(&vertices, &indices, &counters, &grid);
+    let mut mesh = assemble_mesh(&vertices, &indices, &counters, &grid);
     let triangles = mesh.indices().map_or(0, |i| i.len() / 3);
 
-    let bytes = match gltf::mesh_to_glb(&mesh) {
+    let animation = match (state.rig, skins, joint_samples) {
+        (Some(rig), Some(skins), Some(samples)) => {
+            match rig_mesh(&mut mesh, &rig, &skins, &samples) {
+                Ok(animation) => Some(animation),
+                Err(error) => {
+                    warn!("bake wrote nothing: {error}");
+                    state.status = Some(format!("nothing written: {error}"));
+                    return;
+                }
+            }
+        }
+        _ => None,
+    };
+    let rigged = animation
+        .as_ref()
+        .map(|a| format!(", {} joints, {} keyframes", a.joint_count(), a.times.len()))
+        .unwrap_or_default();
+
+    let bytes = match gltf::mesh_to_glb(&mesh, animation.as_ref()) {
         Ok(bytes) => bytes,
         Err(error @ (gltf::GlbError::NoTriangles | gltf::GlbError::NonFinitePosition)) => {
             warn!("bake wrote nothing: {error}");
@@ -172,7 +270,7 @@ fn finish_bake(mut state: ResMut<BakeState>, grid: Res<SdfGrid>, project: Res<Me
     };
 
     state.status = Some(match write_bytes(&project.bake_file(), &bytes) {
-        Ok(path) => format!("{triangles} tris -> {}", path.display()),
+        Ok(path) => format!("{triangles} tris{rigged} -> {}", path.display()),
         Err(error) => {
             error!("bake failed: {error}");
             format!("bake failed: {error}")
@@ -228,6 +326,22 @@ fn assemble_mesh(
     .with_inserted_attribute(Mesh::ATTRIBUTE_NORMAL, normals)
     .with_inserted_attribute(Mesh::ATTRIBUTE_COLOR, weights)
     .with_inserted_indices(Indices::U32(kept))
+}
+
+fn rig_mesh(
+    mesh: &mut Mesh,
+    rig: &Rig,
+    skins: &[Skin],
+    samples: &[JointSample],
+) -> Result<SkinAnimation, skin::SkinError> {
+    let animation = SkinAnimation::from_samples(rig, samples)?;
+    let attributes = skin_attributes(skins, mesh.count_vertices(), rig.joints)?;
+    mesh.insert_attribute(
+        Mesh::ATTRIBUTE_JOINT_INDEX,
+        VertexAttributeValues::Uint16x4(attributes.joints),
+    );
+    mesh.insert_attribute(Mesh::ATTRIBUTE_JOINT_WEIGHT, attributes.weights);
+    Ok(animation)
 }
 
 fn write_bytes(path: &Path, bytes: &[u8]) -> io::Result<PathBuf> {

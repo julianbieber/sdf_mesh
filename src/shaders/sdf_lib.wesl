@@ -1,13 +1,22 @@
+import package::sdf_types::Skin;
+
 struct Surface {
     dist: f32,
     weights: vec4<f32>,
+    skin: Skin,
+}
+
+struct Joint {
+    translation: vec3<f32>,
+    rotation: vec4<f32>,
+}
+
+fn root_skin() -> Skin {
+    return Skin(vec4(0u), vec4(1.0, 0.0, 0.0, 0.0));
 }
 
 fn surface_blend(dist: f32, weights: vec4<f32>) -> Surface {
-    var s: Surface;
-    s.dist = dist;
-    s.weights = weights;
-    return s;
+    return Surface(dist, weights, root_skin());
 }
 
 fn surface(dist: f32, material: u32) -> Surface {
@@ -17,6 +26,72 @@ fn surface(dist: f32, material: u32) -> Surface {
         select(0.0, 1.0, material == 2u),
         select(0.0, 1.0, material >= 3u),
     ));
+}
+
+fn on_joint(s: Surface, joint: u32) -> Surface {
+    var out = s;
+    out.skin = Skin(vec4(joint, 0u, 0u, 0u), vec4(1.0, 0.0, 0.0, 0.0));
+    return out;
+}
+
+fn skin_mix(x: Skin, y: Skin, t: f32) -> Skin {
+    var ids = array<u32, 8>(
+        y.joints.x, y.joints.y, y.joints.z, y.joints.w,
+        x.joints.x, x.joints.y, x.joints.z, x.joints.w,
+    );
+    var ws = array<f32, 8>(
+        y.weights.x * t, y.weights.y * t, y.weights.z * t, y.weights.w * t,
+        x.weights.x * (1.0 - t), x.weights.y * (1.0 - t),
+        x.weights.z * (1.0 - t), x.weights.w * (1.0 - t),
+    );
+    for (var i = 0u; i < 8u; i = i + 1u) {
+        for (var j = i + 1u; j < 8u; j = j + 1u) {
+            if ids[j] == ids[i] {
+                ws[i] = ws[i] + ws[j];
+                ws[j] = 0.0;
+            }
+        }
+    }
+    var out = Skin(vec4(0u), vec4(0.0));
+    for (var k = 0u; k < 4u; k = k + 1u) {
+        var best = 0u;
+        for (var i = 1u; i < 8u; i = i + 1u) {
+            if ws[i] > ws[best] {
+                best = i;
+            }
+        }
+        out.joints[k] = ids[best];
+        out.weights[k] = max(ws[best], 0.0);
+        ws[best] = -1.0;
+    }
+    let total = out.weights.x + out.weights.y + out.weights.z + out.weights.w;
+    if total <= 0.0 {
+        return root_skin();
+    }
+    out.weights = out.weights / total;
+    return out;
+}
+
+fn joint(translation: vec3<f32>, rotation: vec4<f32>) -> Joint {
+    return Joint(translation, rotation);
+}
+
+fn joint_identity() -> Joint {
+    return Joint(vec3(0.0), vec4(0.0, 0.0, 0.0, 1.0));
+}
+
+fn quat_axis_angle(axis: vec3<f32>, angle: f32) -> vec4<f32> {
+    return vec4(normalize(axis) * sin(0.5 * angle), cos(0.5 * angle));
+}
+
+fn quat_rotate(q: vec4<f32>, v: vec3<f32>) -> vec3<f32> {
+    let t = 2.0 * cross(q.xyz, v);
+    return v + q.w * t + cross(q.xyz, t);
+}
+
+fn op_joint(p: vec3<f32>, j: Joint) -> vec3<f32> {
+    let q = normalize(j.rotation);
+    return quat_rotate(vec4(-q.xyz, q.w), p - j.translation);
 }
 
 fn sd_sphere(p: vec3<f32>, radius: f32) -> f32 {
@@ -71,25 +146,29 @@ fn op_subtract(a: Surface, b: Surface) -> Surface {
     if a.dist >= -b.dist {
         return a;
     }
-    return surface_blend(-b.dist, a.weights);
+    var out = a;
+    out.dist = -b.dist;
+    return out;
 }
 
 fn op_smooth_union(a: Surface, b: Surface, k: f32) -> Surface {
     let h = clamp(0.5 + 0.5 * (b.dist - a.dist) / k, 0.0, 1.0);
     let dist = mix(b.dist, a.dist, h) - k * h * (1.0 - h);
-    return surface_blend(dist, mix(b.weights, a.weights, h));
+    return Surface(dist, mix(b.weights, a.weights, h), skin_mix(b.skin, a.skin, h));
 }
 
 fn op_smooth_intersect(a: Surface, b: Surface, k: f32) -> Surface {
     let h = clamp(0.5 - 0.5 * (b.dist - a.dist) / k, 0.0, 1.0);
     let dist = mix(b.dist, a.dist, h) + k * h * (1.0 - h);
-    return surface_blend(dist, mix(b.weights, a.weights, h));
+    return Surface(dist, mix(b.weights, a.weights, h), skin_mix(b.skin, a.skin, h));
 }
 
 fn op_smooth_subtract(a: Surface, b: Surface, k: f32) -> Surface {
     let h = clamp(0.5 - 0.5 * (a.dist + b.dist) / k, 0.0, 1.0);
     let dist = mix(a.dist, -b.dist, h) + k * h * (1.0 - h);
-    return surface_blend(dist, a.weights);
+    var out = a;
+    out.dist = dist;
+    return out;
 }
 
 fn op_translate(p: vec3<f32>, offset: vec3<f32>) -> vec3<f32> {

@@ -1,4 +1,5 @@
-import package::sdf_types::{SdfParams, FieldSample};
+import package::sdf_types::{SdfParams, FieldSample, Skin};
+import package::sdf_lib::skin_mix;
 
 const TRI_TABLE_ROW: u32 = 16u;
 
@@ -14,6 +15,7 @@ struct Counters {
 @group(0) @binding(3) var<storage, read_write> counters: Counters;
 @group(0) @binding(4) var<storage, read_write> vertices: array<f32>;
 @group(0) @binding(5) var<storage, read_write> indices: array<u32>;
+@group(0) @binding(6) var<storage, read_write> skins: array<Skin>;
 
 fn corner_offset(corner: u32) -> vec3<i32> {
     let ring = corner & 3u;
@@ -85,11 +87,13 @@ fn march(@builtin(global_invocation_id) gid: vec3<u32>) {
 
     var distances: array<f32, 8>;
     var weights: array<vec4<f32>, 8>;
+    var corner_skins: array<Skin, 8>;
     var mask = 0u;
     for (var corner = 0u; corner < 8u; corner = corner + 1u) {
         let sample = field_sample(base_cell + corner_offset(corner));
         distances[corner] = sample.dist;
         weights[corner] = sample.weights;
+        corner_skins[corner] = sample.skin;
         if sample.dist < params.iso {
             mask = mask | (1u << corner);
         }
@@ -145,5 +149,6 @@ fn march(@builtin(global_invocation_id) gid: vec3<u32>) {
         vertices[offset + 9u] = blended.w;
 
         indices[params.index_base + vertex] = vertex;
+        skins[vertex] = skin_mix(corner_skins[a], corner_skins[b], t);
     }
 }

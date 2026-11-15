@@ -37,6 +37,13 @@ pub const TRIPLANAR_SHADER: &str = "embedded://sdf_mesh/triplanar.wesl";
 /// can map to the same module and displace it.
 pub const ENTRY_ASSET: &str = "sdf-mesh-entry/evaluate.wesl";
 
+/// The asset path the joint sampler module is registered under, outside the
+/// project's module space for the same reason as [`ENTRY_ASSET`].
+pub const JOINTS_ASSET: &str = "sdf-mesh-entry/joints.wesl";
+
+/// Invocations per workgroup of the joint sampler's `sample_joints`.
+pub const JOINT_WORKGROUP: u32 = 64;
+
 /// Embeds the package and keeps its library modules loaded for the life of the
 /// app.
 pub struct ShaderPackagePlugin;
@@ -108,9 +115,57 @@ pub fn entry_module_source(scene_module: &[String]) -> String {
          \x20   let position = params.origin + vec3<f32>(gid) * params.cell_size;\n\
          \x20   let sample = sdf_scene(position, params.time);\n\
          \x20   let index = gid.x + gid.y * res + gid.z * res * res;\n\
-         \x20   field[index] = FieldSample(sample.weights, sample.dist);\n\
+         \x20   field[index] = FieldSample(sample.weights, sample.dist, sample.skin);\n\
          }}\n",
         scene = scene_module.join("::"),
+    )
+}
+
+/// The source of the joint sampler module for the scene at
+/// `package::<scene_module>`.
+///
+/// It declares the `sample_joints` compute entry point, dispatched in
+/// [`JOINT_WORKGROUP`]-wide workgroups over `sample_count` invocations, which
+/// writes `sdf_joint(joint, seconds * frame / frames)` for every joint below
+/// `joint_count` at every frame, frame-major. Without `calls_sdf_joint` it
+/// imports nothing from the scene and writes nothing, so it compiles for a
+/// scene that declares no `sdf_joint`.
+pub fn joints_module_source(scene_module: &[String], calls_sdf_joint: bool) -> String {
+    let (import, body) = if calls_sdf_joint {
+        (
+            format!(
+                "import package::{scene}::sdf_joint;\n",
+                scene = scene_module.join("::")
+            ),
+            "\x20   let frame = gid.x / sampling.joint_count;\n\
+             \x20   let joint = gid.x % sampling.joint_count;\n\
+             \x20   let time = sampling.seconds * f32(frame) / f32(sampling.frames);\n\
+             \x20   samples[gid.x] = sdf_joint(joint, time);\n",
+        )
+    } else {
+        (String::new(), "")
+    };
+    format!(
+        "{import}\
+         import {PACKAGE}::sdf_lib::Joint;\n\
+         \n\
+         struct JointSampling {{\n\
+         \x20   joint_count: u32,\n\
+         \x20   frames: u32,\n\
+         \x20   sample_count: u32,\n\
+         \x20   seconds: f32,\n\
+         }}\n\
+         \n\
+         @group(0) @binding(0) var<uniform> sampling: JointSampling;\n\
+         @group(0) @binding(1) var<storage, read_write> samples: array<Joint>;\n\
+         \n\
+         @compute @workgroup_size({JOINT_WORKGROUP})\n\
+         fn sample_joints(@builtin(global_invocation_id) gid: vec3<u32>) {{\n\
+         \x20   if gid.x >= sampling.sample_count {{\n\
+         \x20       return;\n\
+         \x20   }}\n\
+         {body}\
+         }}\n"
     )
 }
 
@@ -217,6 +272,55 @@ mod tests {
         );
         let module = compose(&mut cache, 11);
         assert!(module.entry_points.iter().any(|e| e.name == "evaluate"));
+    }
+
+    fn compose_scene(scene: &str) -> (Cache, MeshProject) {
+        let project = MeshProject::open(Path::new(scene)).expect("scene should open");
+        let mut cache = library_cache();
+        let source = std::fs::read_to_string(&project.scene_file).unwrap();
+        cache.set_shader(
+            id(10),
+            Shader::from_wesl(source, project.scene_asset_path()),
+        );
+        cache.set_shader(
+            id(11),
+            Shader::from_wesl(entry_module_source(&project.scene_module), ENTRY_ASSET),
+        );
+        (cache, project)
+    }
+
+    #[test]
+    fn the_animated_scenes_compose_with_a_joint_sampler_matching_their_rig() {
+        for (scene, rigged) in [
+            ("example/shaders/animated.wesl", false),
+            ("example/shaders/animated_skinned.wesl", true),
+            ("example/shaders/scene.wesl", false),
+        ] {
+            let (mut cache, project) = compose_scene(scene);
+            let module = compose(&mut cache, 11);
+            assert!(module.entry_points.iter().any(|e| e.name == "evaluate"));
+            let source = std::fs::read_to_string(&project.scene_file).unwrap();
+            assert_eq!(crate::rig::defines_sdf_joint(&source), rigged, "{scene}");
+            assert_eq!(
+                crate::rig::read_rig(&source).unwrap().is_some(),
+                rigged,
+                "{scene}"
+            );
+            cache.set_shader(
+                id(12),
+                Shader::from_wesl(
+                    joints_module_source(&project.scene_module, rigged),
+                    JOINTS_ASSET,
+                ),
+            );
+            let module = compose(&mut cache, 12);
+            assert!(
+                module
+                    .entry_points
+                    .iter()
+                    .any(|e| e.name == "sample_joints")
+            );
+        }
     }
 
     // Pins that the meshing shader composes against the library it imports through `package::`.
